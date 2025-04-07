@@ -26,7 +26,7 @@ data class Commit(
 )
 
 class Library {
-    val client = OkHttpClient()
+    var client = OkHttpClient()
 
     @Throws(Exception::class, IOException::class)
     fun findBranchByNameRemote(api: String, branchName: String, accessToken: String? = null): Branch {
@@ -48,7 +48,10 @@ class Library {
         }
 
         if (!response.isSuccessful) {
-            throw Exception("GitHub API error: ${response.code} - ${response.body?.string()}")
+            when (response.code) {
+                404 -> throw Exception("Remote branch '$branchName' not found")
+                else -> throw Exception("GitHub API error: ${response.code} - ${response.body?.string()}")
+            }
         }
 
         val body = response.body?.string() ?: throw Exception("Empty response body")
@@ -62,7 +65,7 @@ class Library {
             }
         }
 
-        throw Exception("Branch '$branchName' not found")
+        throw Exception("Remote branch '$branchName' not found")
     }
 
     @Throws(IOException::class, Exception::class, FileNotFoundException::class)
@@ -105,9 +108,6 @@ class Library {
         }
 
         if (!response.isSuccessful) {
-            if (response.code == 404) {
-                throw Exception("Commit ${branch.name} not found")
-            }
             throw Exception("GitHub API error: ${response.code} - ${response.body?.string()}")
         }
 
@@ -204,8 +204,6 @@ class Library {
 
     @Throws(Exception::class)
     fun findModifiedFilesRemote(api: String, latestCommitSha: String, mergeBaseSha: String, accessToken: String? = null): List<String> {
-        val client = OkHttpClient()
-
         val url = "$api/compare/$mergeBaseSha...$latestCommitSha"
         val requestBuilder = Request.Builder()
             .url(url)
@@ -216,10 +214,11 @@ class Library {
         }
 
         val request = requestBuilder.build()
-        val response = try {
-            client.newCall(request).execute()
+        val response: Response
+        try {
+            response = client.newCall(request).execute()
         } catch (e: Exception) {
-            throw Exception("Network error: ${e.message}", e)
+            throw Exception(e)
         }
 
         if (!response.isSuccessful) {
@@ -232,7 +231,9 @@ class Library {
         val bodyStr = response.body?.string() ?: throw Exception("Empty response from GitHub")
         val json = JSONObject(bodyStr)
 
+        print(json.toString(1))
         val filesJson = json.getJSONArray("files")
+        print(filesJson.toString(1))
         val modifiedFiles = mutableListOf<String>()
 
         for (i in 0 until filesJson.length()) {
@@ -244,8 +245,8 @@ class Library {
     }
 
     @Throws(Exception::class)
-    fun findConflicts(repoOwner: String, repoName: String, accessToken: String, localRepoPath: String, branchA: String, branchB: String): List<String> {
-        val request = Request.Builder().url("https://api.github.com/users/$repoOwner").get().build()
+    fun tryRequest(api: String, repoOwner: String? = null, repoName: String? = null) {
+        val request = Request.Builder().url(api).get().build()
         val response:Response
         try {
             response = client.newCall(request).execute()
@@ -254,10 +255,20 @@ class Library {
         }
         if (!response.isSuccessful) {
             when (response.code) {
-                404 -> throw Exception("User ${repoOwner} not found")
+                404 -> {
+                    if (!repoOwner.isNullOrEmpty())
+                        throw Exception("User '$repoOwner' not found")
+                    throw Exception("Repo '$repoName' not found")
+                }
                 else -> throw Exception("GitHub API error: ${response.code} - ${response.body?.string()}")
             }
         }
+    }
+
+    @Throws(Exception::class)
+    fun findConflicts(repoOwner: String, repoName: String, accessToken: String, localRepoPath: String, branchA: String, branchB: String): List<String> {
+        tryRequest("https://api.github.com/users/$repoOwner", repoOwner = repoOwner)
+        tryRequest("https://api.github.com/repos/$repoOwner/$repoName", repoName = repoName)
 
         val localRepoDir = File(localRepoPath)
         if (!localRepoDir.exists() || !File(localRepoPath, ".git").exists()) {
@@ -277,7 +288,16 @@ class Library {
         val latestCommitRemote = getLatestCommitRemote(api, remoteBranch, repoOwner, repoName, accessToken)
         val modifiedFilesRemote = findModifiedFilesRemote(api, latestCommitRemote.sha, mergeBaseSha, accessToken)
 
-        return modifiedFilesLocal.intersect(modifiedFilesRemote.toSet()).toList()
+        val modifiedFiles = modifiedFilesLocal.intersect(modifiedFilesRemote.toSet()).toList()
+
+        if (modifiedFiles.isEmpty()) {
+            println("No conflicting files found.")
+        } else {
+            println("Conflicting files:")
+            modifiedFiles.forEach { println(" - $it") }
+        }
+
+        return modifiedFiles
     }
 
 }
