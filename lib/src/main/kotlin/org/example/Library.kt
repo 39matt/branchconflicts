@@ -6,8 +6,10 @@ package org.example
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okio.FileNotFoundException
 import okio.IOException
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 
@@ -26,7 +28,7 @@ data class Commit(
 class Library {
     val client = OkHttpClient()
 
-    @Throws(Exception::class)
+    @Throws(Exception::class, IOException::class)
     fun findBranchByNameRemote(api: String, branchName: String, accessToken: String? = null): Branch {
 
         val request = Request.Builder()
@@ -41,7 +43,7 @@ class Library {
         val response: Response
         try {
             response = client.newCall(request).execute()
-        } catch (e: IOException) {
+        } catch (e: Exception) {
             throw Exception(e)
         }
 
@@ -63,27 +65,28 @@ class Library {
         throw Exception("Branch '$branchName' not found")
     }
 
+    @Throws(IOException::class, Exception::class, FileNotFoundException::class)
     fun findBranchByNameLocal(localRepoPath: String, branchName: String): Branch {
         val branchLogsPath = "$localRepoPath/.git/logs/refs/heads/$branchName"
         val branchDirPath = "$localRepoPath/.git/logs/refs/heads"
 
         val branchFile = File(branchLogsPath)
         if (!branchFile.exists()) {
-            throw Exception("Local branch '$branchName' not found")
+            throw FileNotFoundException("Local branch '$branchName' not found")
         }
 
         val localBranchList = File(branchDirPath).list() ?: emptyArray()
         val branchNameLocal = localBranchList.find { it == branchName }
 
         val lastLine = branchFile.readLines().lastOrNull()
-            ?: throw Exception("No log found for branch '$branchName'")
+            ?: throw IOException("No log found for branch '$branchName'")
 
         val sha = lastLine.split(" ").getOrNull(1) ?: throw Exception("No commit SHA found in the log")
 
         return Branch(branchNameLocal ?: throw Exception("Branch '$branchName' not found in branch list"), sha)
     }
 
-    @Throws(Exception::class)
+    @Throws(Exception::class, IOException::class)
     fun getLatestCommitRemote(api: String, branch: Branch, owner: String, repo: String, accessToken: String? = null): Commit {
         val request = Request.Builder()
             .url("$api/commits/${branch.commitSha}")
@@ -97,7 +100,7 @@ class Library {
         val response: Response
         try {
             response = client.newCall(request).execute()
-        } catch (e: IOException) {
+        } catch (e: Exception) {
             throw Exception(e)
         }
 
@@ -123,12 +126,13 @@ class Library {
         return Commit(message, sha, parentsSha)
     }
 
+    @Throws(Exception::class, IOException::class, FileNotFoundException::class)
     fun getLatestCommitLocal(branch: Branch, localRepoPath: String): Commit {
         val logPath = "$localRepoPath/.git/logs/refs/heads/${branch.name}"
         val branchFile = File(logPath)
 
         if (!branchFile.exists()) {
-            throw Exception("Local branch '${branch.name}' not found")
+            throw FileNotFoundException("Local branch '${branch.name}' not found")
         }
 
         if (branchFile.length() == 0L) {
@@ -159,4 +163,19 @@ class Library {
 
         return commit
     }
+
+    @Throws(Exception::class)
+    fun findMergeBase(api: String, branchA: Branch, branchB: Branch, repoOwner: String, repoName: String, localRepoPath: String, accessToken: String? = null): String {
+        val latestCommitRemote = getLatestCommitRemote(api, branchA, repoOwner, repoName, accessToken)
+        val latestCommitLocal = getLatestCommitLocal(branchB, localRepoPath)
+
+        for (sha in latestCommitRemote.parentsSha) {
+            if (sha in latestCommitLocal.parentsSha) {
+                return sha
+            }
+        }
+        throw Exception("Branches '${branchA.name}' and '${branchB.name}' do not share a merge base!")
+    }
+
+
 }
