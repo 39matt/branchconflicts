@@ -35,6 +35,10 @@ dependencies {
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20231013")
+
+    testImplementation("io.mockk:mockk:1.13.5")
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.0")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.0")
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
