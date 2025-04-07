@@ -177,5 +177,71 @@ class Library {
         throw Exception("Branches '${branchA.name}' and '${branchB.name}' do not share a merge base!")
     }
 
+    @Throws(Exception::class)
+    fun findModifiedFilesLocal(latestCommitSha: String, mergeBaseSha: String, localRepoPath: String): List<String> {
+        val originalDir = System.getProperty("user.dir")
+        try {
+            System.setProperty("user.dir", localRepoPath)
+
+            val process = ProcessBuilder(
+                "git", "diff-tree", "--no-commit-id", "--name-only", latestCommitSha, mergeBaseSha, "-r"
+            )
+                .directory(File(localRepoPath))
+                .redirectErrorStream(true)
+                .start()
+
+            val output = process.inputStream.bufferedReader().readText().trim()
+            val exitCode = process.waitFor()
+            if (exitCode != 0) {
+                throw Exception("git diff-tree command failed with exit code $exitCode")
+            }
+
+            return output.lines().filter { it.isNotBlank() }
+        } finally {
+            System.setProperty("user.dir", originalDir)
+        }
+    }
+
+    @Throws(Exception::class)
+    fun findModifiedFilesRemote(api: String, latestCommitSha: String, mergeBaseSha: String, accessToken: String? = null): List<String> {
+        val client = OkHttpClient()
+
+        val url = "$api/compare/$mergeBaseSha...$latestCommitSha"
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .get()
+
+        if (!accessToken.isNullOrBlank()) {
+            requestBuilder.header("Authorization", "token $accessToken")
+        }
+
+        val request = requestBuilder.build()
+        val response = try {
+            client.newCall(request).execute()
+        } catch (e: Exception) {
+            throw Exception("Network error: ${e.message}", e)
+        }
+
+        if (!response.isSuccessful) {
+            when (response.code) {
+                404 -> throw Exception("One of the SHAs is not valid")
+                else -> throw Exception("GitHub API error: ${response.code} - ${response.body?.string()}")
+            }
+        }
+
+        val bodyStr = response.body?.string() ?: throw Exception("Empty response from GitHub")
+        val json = JSONObject(bodyStr)
+
+        val filesJson = json.getJSONArray("files")
+        val modifiedFiles = mutableListOf<String>()
+
+        for (i in 0 until filesJson.length()) {
+            val file = filesJson.getJSONObject(i)
+            modifiedFiles.add(file.getString("filename"))
+        }
+
+        return modifiedFiles
+    }
+
 
 }
