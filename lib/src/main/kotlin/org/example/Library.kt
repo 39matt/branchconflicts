@@ -243,5 +243,41 @@ class Library {
         return modifiedFiles
     }
 
+    @Throws(Exception::class)
+    fun findConflicts(repoOwner: String, repoName: String, accessToken: String, localRepoPath: String, branchA: String, branchB: String): List<String> {
+        val request = Request.Builder().url("https://api.github.com/users/$repoOwner").get().build()
+        val response:Response
+        try {
+            response = client.newCall(request).execute()
+        } catch (e: Exception) {
+            throw Exception("Network error: ${e.message}", e)
+        }
+        if (!response.isSuccessful) {
+            when (response.code) {
+                404 -> throw Exception("User ${repoOwner} not found")
+                else -> throw Exception("GitHub API error: ${response.code} - ${response.body?.string()}")
+            }
+        }
+
+        val localRepoDir = File(localRepoPath)
+        if (!localRepoDir.exists() || !File(localRepoPath, ".git").exists()) {
+            throw Exception("Local repo path does not exist: $localRepoPath")
+        }
+
+        val api = "https://api.github.com/repos/$repoOwner/$repoName"
+
+        val remoteBranch = findBranchByNameRemote(api, branchA, accessToken)
+        val localBranch = findBranchByNameLocal(localRepoPath, branchB)
+
+        val mergeBaseSha = findMergeBase(api, remoteBranch, localBranch, repoOwner, repoName, localRepoPath, accessToken)
+
+        val latestCommitLocal = getLatestCommitLocal(localBranch, localRepoPath)
+        val modifiedFilesLocal = findModifiedFilesLocal(latestCommitLocal.sha, mergeBaseSha, localRepoPath)
+
+        val latestCommitRemote = getLatestCommitRemote(api, remoteBranch, repoOwner, repoName, accessToken)
+        val modifiedFilesRemote = findModifiedFilesRemote(api, latestCommitRemote.sha, mergeBaseSha, accessToken)
+
+        return modifiedFilesLocal.intersect(modifiedFilesRemote.toSet()).toList()
+    }
 
 }
